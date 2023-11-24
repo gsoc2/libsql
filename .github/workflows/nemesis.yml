@@ -1,0 +1,90 @@
+name: Nemesis Tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request_target:
+    branches: [ "main" ]
+  merge_group:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+  PROTOC_VERSION: 3.23.4
+  # FIXME: There are some warnings depending on certain feature flags that
+  # we need to fix before we can enable this.
+  # RUSTFLAGS: "-D warnings"
+
+jobs:
+  authorize:
+    environment: ${{ github.event_name == 'pull_request_target' &&
+      github.event.pull_request.head.repo.full_name != github.repository &&
+      'external' || 'internal' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: true
+
+  test-nemesis:
+    needs: authorize
+    runs-on: self-hosted
+    name: Run Nemesis Tests
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: hecrj/setup-rust-action@v1
+
+      - name: Install deps
+        run: sudo apt update && sudo apt install -y libclang-dev
+
+      - name: Install protoc
+        uses: taiki-e/install-action@v2
+        with:
+          tool: protoc@${{ env.PROTOC_VERSION }}
+
+      - uses: actions/checkout@v3
+
+      - name: Set up cargo cache
+        uses: actions/cache@v3
+        continue-on-error: false
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Cargo build
+        run: |
+          cargo build
+          mv ./target/debug/sqld /home/ubuntu/.cargo/bin
+          sqld --version
+
+      - name: Download MinIO binary
+        run: |
+          wget -q https://dl.min.io/server/minio/release/linux-amd64/minio -O minio
+          chmod +x minio
+          mv minio /home/ubuntu/.cargo/bin
+          minio --version
+
+      - name: Nemesis tests checkout
+        uses: actions/checkout@v3
+        with:
+          repository: gsoc2/gsoc2test
+          ref: "main"
+          path: "nemesis-tests"
+          token: ${{ secrets.ACCESS_TOKEN_GSOC2_TEST }}
+
+      - name: Build nemesis test
+        uses: actions/setup-go@v4
+        with:
+          go-version: '>=1.21.4'
+      - run: |
+          cd nemesis-tests
+          go build -o ../gsoc2tests cmd/gsoc2test/main.go
+
+      - name: Run nemesis tests
+        run: |
+          ./gsoc2tests nemesis local
